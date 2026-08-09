@@ -10,7 +10,6 @@ import {
   FolderOpen,
   LayoutDashboard,
   LayoutTemplate,
-  Scissors,
   Settings,
   Shuffle,
   Sparkles,
@@ -23,7 +22,6 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/clipping", label: "Campaign Clipping", icon: Scissors },
   { href: "/studio", label: "Studio Floor", icon: Bot },
   { href: "/channels", label: "Channels", icon: Tv },
   { href: "/projects", label: "AI Projects", icon: Sparkles },
