@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { safeJson } from "@fable/shared";
 import type { Channel, Video } from "@prisma/client";
 import { env } from "../../config/env";
+import { readChannelSecret, sealChannelSecret } from "../../lib/channelSecrets";
 import { createLogger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { getUserKeys } from "../../lib/providerKeys";
@@ -65,7 +66,7 @@ function mockTokens(): YoutubeTokens {
 
 /** Normalize whatever token shape is stored in channel.youtubeJson. */
 function readTokens(channel: Channel): YoutubeTokens {
-  const raw = safeJson<Record<string, unknown>>(channel.youtubeJson, {});
+  const raw = safeJson<Record<string, unknown>>(readChannelSecret(channel.youtubeJson), {});
   const str = (a: unknown, b: unknown): string =>
     typeof a === "string" && a ? a : typeof b === "string" && b ? b : "";
   const num = (a: unknown, b: unknown): number =>
@@ -201,10 +202,16 @@ async function freshTokens(channel: Channel): Promise<YoutubeTokens> {
   let tokens = readTokens(channel);
   if (tokens.expiryMs < Date.now() + 60_000) {
     tokens = await refreshToken(tokens, channel.userId);
-    const existing = safeJson<Record<string, unknown>>(channel.youtubeJson, {});
+    const existing = safeJson<Record<string, unknown>>(
+      readChannelSecret(channel.youtubeJson), {},
+    );
     await prisma.channel.update({
       where: { id: channel.id },
-      data: { youtubeJson: JSON.stringify({ ...existing, ...tokens }) },
+      // Must re-seal. This runs on every token refresh, so writing plaintext
+      // here would quietly un-encrypt every active channel within an hour.
+      data: {
+        youtubeJson: sealChannelSecret(JSON.stringify({ ...existing, ...tokens })),
+      },
     });
   }
   return tokens;

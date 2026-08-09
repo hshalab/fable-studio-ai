@@ -1,5 +1,7 @@
+import { safeJson } from "@fable/shared";
 import { createApp } from "./app";
 import { env } from "./config/env";
+import { readChannelSecret, sealChannelSecret } from "./lib/channelSecrets";
 import { logger } from "./lib/logger";
 import { prisma } from "./lib/prisma";
 import { assertProductionConfig } from "./lib/security";
@@ -13,10 +15,24 @@ async function main() {
   // for a real Google OAuth connection instead.
   if (env.isProd) {
     try {
-      const reset = await prisma.channel.updateMany({
-        where: { connected: true, youtubeJson: { contains: '"mock":true' } },
-        data: { connected: false, youtubeJson: "{}" },
+      // Read-then-filter rather than `youtubeJson: { contains: '"mock":true' }`.
+      // That substring match worked only while the column was plaintext, and it
+      // would not error once sealed — it would simply match nothing, silently
+      // leaving mock-connected channels looking connected in production, which
+      // is the exact state this sweep exists to prevent.
+      const candidates = await prisma.channel.findMany({
+        where: { connected: true },
+        select: { id: true, youtubeJson: true },
       });
+      const mockIds = candidates
+        .filter((c) => safeJson<{ mock?: boolean }>(readChannelSecret(c.youtubeJson), {}).mock === true)
+        .map((c) => c.id);
+      const reset = mockIds.length
+        ? await prisma.channel.updateMany({
+            where: { id: { in: mockIds } },
+            data: { connected: false, youtubeJson: sealChannelSecret("{}") },
+          })
+        : { count: 0 };
       if (reset.count > 0) logger.info(`Reset ${reset.count} mock-connected channel(s)`);
     } catch (err) {
       logger.warn(

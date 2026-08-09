@@ -7,6 +7,7 @@ import type {
 } from "@fable/shared";
 import { DEFAULT_WEEKLY_SCHEDULE, VOICE_PRESETS, safeJson } from "@fable/shared";
 import { env } from "../../config/env";
+import { readChannelSecret, sealChannelSecret } from "../../lib/channelSecrets";
 import { AppError, badRequest, notFound } from "../../lib/errors";
 import { prisma } from "../../lib/prisma";
 import { exchangeCode, fetchMyChannel, getAuthUrl, isYoutubeConfiguredFor } from "../../services/youtube";
@@ -172,7 +173,7 @@ export async function getChannelDetail(userId: string, channelId: string) {
   });
   if (!channel) throw notFound("Channel");
 
-  const yt = safeJson<StoredYoutube>(channel.youtubeJson, {});
+  const yt = safeJson<StoredYoutube>(readChannelSecret(channel.youtubeJson), {});
   const type = channel.type as ChannelType;
 
   return {
@@ -224,7 +225,7 @@ export async function createChannel(
       uploadDefaultsJson: JSON.stringify(DEFAULT_UPLOAD_DEFAULTS),
       scheduleJson: JSON.stringify(DEFAULT_WEEKLY_SCHEDULE),
       promptsJson: JSON.stringify({}),
-      youtubeJson: JSON.stringify({}),
+      youtubeJson: sealChannelSecret(JSON.stringify({})),
     },
   });
   return getChannelDetail(userId, channel.id);
@@ -291,10 +292,12 @@ async function markMockConnected(channelId: string): Promise<void> {
     where: { id: channelId },
     data: {
       connected: true,
-      youtubeJson: JSON.stringify({
-        mock: true,
-        connectedAt: new Date().toISOString(),
-      } satisfies StoredYoutube),
+      youtubeJson: sealChannelSecret(
+        JSON.stringify({
+          mock: true,
+          connectedAt: new Date().toISOString(),
+        } satisfies StoredYoutube),
+      ),
     },
   });
 }
@@ -332,7 +335,7 @@ export async function disconnectChannel(userId: string, channelId: string) {
   const channel = await getOwnedChannel(userId, channelId);
   await prisma.channel.update({
     where: { id: channel.id },
-    data: { connected: false, youtubeJson: JSON.stringify({}) },
+    data: { connected: false, youtubeJson: sealChannelSecret(JSON.stringify({})) },
   });
   return { connected: false };
 }
@@ -365,7 +368,7 @@ export async function completeOAuthCallback(
 
   const tokens = await exchangeCode(code, stateUserId);
   // Google only returns refresh_token on first consent — keep the stored one otherwise.
-  const previous = safeJson<StoredYoutube>(channel.youtubeJson, {});
+  const previous = safeJson<StoredYoutube>(readChannelSecret(channel.youtubeJson), {});
   const stored: StoredYoutube = {
     connectedAt: new Date().toISOString(),
     accessToken: tokens.accessToken,
@@ -375,7 +378,7 @@ export async function completeOAuthCallback(
   };
   await prisma.channel.update({
     where: { id: channel.id },
-    data: { connected: true, youtubeJson: JSON.stringify(stored) },
+    data: { connected: true, youtubeJson: sealChannelSecret(JSON.stringify(stored)) },
   });
 
   // Best-effort: adopt the real channel identity (title, @handle, subs) so the

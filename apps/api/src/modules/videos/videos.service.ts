@@ -1,5 +1,6 @@
 import type { VideoStatus, VideoSummary } from "@fable/shared";
 import { QUEUE_JOBS, clamp, fnv1a, pick, safeJson, seededRandom } from "@fable/shared";
+import { readChannelSecret } from "../../lib/channelSecrets";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { prisma } from "../../lib/prisma";
 import { activeKeys } from "../../lib/providerKeys";
@@ -96,7 +97,7 @@ function toAbTest(test: AbTestRow) {
 }
 
 function channelTrulyConnected(channel: { connected: boolean; youtubeJson: string }): boolean {
-  const yt = safeJson<StoredYoutube>(channel.youtubeJson, {});
+  const yt = safeJson<StoredYoutube>(readChannelSecret(channel.youtubeJson), {});
   // Key presence comes from the active per-user key context (request-scoped),
   // falling back to server env keys.
   const keys = activeKeys();
