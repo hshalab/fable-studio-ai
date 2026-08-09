@@ -4,7 +4,7 @@
     {
       "name": "fable-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": ["run", "dev:web"],
       "port": 3100
     }
   ]

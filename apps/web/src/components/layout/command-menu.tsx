@@ -10,7 +10,9 @@ import {
   LayoutDashboard,
   LayoutTemplate,
   Plus,
+  Scissors,
   Settings,
+  Shuffle,
   Sparkles,
   Tv,
   UploadCloud,
@@ -20,6 +22,8 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
 const PAGES = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Campaign Clipping", href: "/clipping", icon: Scissors },
+  { label: "Switch mode", href: "/choose", icon: Shuffle },
   { label: "Channels", href: "/channels", icon: Tv },
   { label: "AI Projects", href: "/projects", icon: Sparkles },
   { label: "Uploads", href: "/uploads", icon: UploadCloud },

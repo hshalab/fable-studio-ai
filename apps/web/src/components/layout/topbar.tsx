@@ -16,6 +16,8 @@ import { Button } from "@/components/ui/button";
 
 const TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
+  "/clipping": "Campaign Clipping",
+  "/studio": "Studio Floor",
   "/channels": "Channels",
   "/projects": "AI Projects",
   "/uploads": "Uploads",
@@ -30,7 +32,11 @@ const TITLES: Record<string, string> = {
 export function Topbar() {
   const pathname = usePathname();
   const qc = useQueryClient();
-  const section = Object.keys(TITLES).find((k) => pathname.startsWith(k));
+  // Anchored the way the sidebar matches: a bare startsWith would let a future
+  // /clippings (or /settings-v2) borrow this section's title.
+  const section = Object.keys(TITLES).find(
+    (k) => pathname === k || pathname.startsWith(`${k}/`),
+  );
 
   const { data: health } = useQuery({
     queryKey: ["health"],

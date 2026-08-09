@@ -10,7 +10,9 @@ import {
   FolderOpen,
   LayoutDashboard,
   LayoutTemplate,
+  Scissors,
   Settings,
+  Shuffle,
   Sparkles,
   Tv,
   UploadCloud,
@@ -21,6 +23,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/clipping", label: "Campaign Clipping", icon: Scissors },
   { href: "/studio", label: "Studio Floor", icon: Bot },
   { href: "/channels", label: "Channels", icon: Tv },
   { href: "/projects", label: "AI Projects", icon: Sparkles },
@@ -84,6 +87,15 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-border/60 p-4">
+        {/* Way back to the chooser. Without it the only route to the other
+            mode is editing the URL, since /choose has no chrome of its own. */}
+        <Link
+          href="/choose"
+          className="mb-3 flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+        >
+          <Shuffle className="h-[18px] w-[18px]" />
+          <span>Switch mode</span>
+        </Link>
         <div className="glass rounded-xl p-3">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
