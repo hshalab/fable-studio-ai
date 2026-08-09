@@ -46,6 +46,9 @@ model ProviderCredential {
   elevenlabsKey  String   @default("")
   ytClientId     String   @default("")
   ytClientSecret String   @default("")
+  /// Meta app for Instagram publishing. Sealed like every other value here.
+  igAppId        String   @default("")
+  igAppSecret    String   @default("")
   updatedAt      DateTime @updatedAt
 }
 
@@ -80,6 +83,7 @@ model Channel {
 
   projects     Project[]
   videos       Video[]
+  connections  ChannelConnection[]
   slots        ScheduleSlot[]
   snapshots    AnalyticsSnapshot[]
   wyrQuestions WyrQuestion[]
@@ -180,6 +184,66 @@ model Video {
   stats  VideoStat[]
   slot   ScheduleSlot?
   abTests AbTest[]
+  posts  VideoPost[]
+}
+
+/// One destination for one video. A clip goes to YouTube, Instagram and TikTok
+/// as three separate posts with independent ids, states and failures — which
+/// Video.youtubeId/status/publishedAt cannot represent, since they describe a
+/// single destination.
+///
+/// Those legacy fields are deliberately KEPT and still written for the YouTube
+/// post. Analytics, the studio feed, the schedule and the web video card all
+/// read them; migrating everything at once would be a much larger change with
+/// no more capability at the end of it.
+model VideoPost {
+  id          String    @id @default(cuid())
+  videoId     String
+  video       Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  platform    String // youtube | instagram | tiktok
+  status      String    @default("pending") // pending|uploading|published|awaiting_creator|failed
+  externalId  String?
+  externalUrl String?
+  /// TikTok forces SELF_ONLY until the app passes their audit, so what we asked
+  /// for and what actually happened have to be recorded separately.
+  visibility  String    @default("public")
+  attempts    Int       @default(0)
+  lastError   String?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([videoId, platform])
+  @@index([platform, status])
+}
+
+/// A connected account on one platform, owned by a Channel.
+///
+/// Not a column on Channel: Channel owns branding, upload defaults, the weekly
+/// schedule, prompts and the automation rule. A platform discriminator there
+/// would force one Channel per platform and duplicate every one of those for
+/// each place the same clip is posted.
+///
+/// credentialsJson is ALWAYS written through sealChannelSecret.
+model ChannelConnection {
+  id                String   @id @default(cuid())
+  channelId         String
+  channel           Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  platform          String // youtube | instagram | tiktok
+  credentialsJson   String   @default("{}")
+  /// IG user id / TikTok open_id. Empty for YouTube, which addresses the
+  /// channel through the token itself.
+  externalAccountId String   @default("")
+  displayName       String   @default("")
+  handle            String   @default("")
+  followerCount     Int      @default(0)
+  scopes            String   @default("")
+  status            String   @default("connected") // connected | needs_reauth | revoked
+  lastError         String?
+  connectedAt       DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([channelId, platform])
 }
 
 model ScheduleSlot {

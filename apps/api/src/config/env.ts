@@ -35,6 +35,8 @@ export const env = {
   elevenlabsKey: process.env.ELEVENLABS_API_KEY ?? "",
   ytClientId: process.env.YT_CLIENT_ID ?? "",
   ytClientSecret: process.env.YT_CLIENT_SECRET ?? "",
+  igAppId: process.env.IG_APP_ID ?? "",
+  igAppSecret: process.env.IG_APP_SECRET ?? "",
   stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
   stripePrices: {

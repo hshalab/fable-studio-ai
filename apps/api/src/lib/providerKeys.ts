@@ -25,6 +25,8 @@ export interface ProviderKeys {
   elevenlabsKey: string;
   ytClientId: string;
   ytClientSecret: string;
+  igAppId: string;
+  igAppSecret: string;
 }
 
 function envKeys(): ProviderKeys {
@@ -35,6 +37,8 @@ function envKeys(): ProviderKeys {
     elevenlabsKey: env.elevenlabsKey,
     ytClientId: env.ytClientId,
     ytClientSecret: env.ytClientSecret,
+    igAppId: env.igAppId,
+    igAppSecret: env.igAppSecret,
   };
 }
 
@@ -63,12 +67,21 @@ export async function getUserKeys(userId: string): Promise<ProviderKeys> {
         userYtId && userYtSecret
           ? { ytClientId: userYtId, ytClientSecret: userYtSecret }
           : { ytClientId: base.ytClientId, ytClientSecret: base.ytClientSecret };
+      // Same atomicity rule for Meta: a user's app id with the server's app
+      // secret is not a credential, it is a guaranteed OAuthException.
+      const userIgId = unseal(row.igAppId);
+      const userIgSecret = unseal(row.igAppSecret);
+      const igPair =
+        userIgId && userIgSecret
+          ? { igAppId: userIgId, igAppSecret: userIgSecret }
+          : { igAppId: base.igAppId, igAppSecret: base.igAppSecret };
       keys = {
         openaiKey: unseal(row.openaiKey) || base.openaiKey,
         anthropicKey: unseal(row.anthropicKey) || base.anthropicKey,
         geminiKey: unseal(row.geminiKey) || base.geminiKey,
         elevenlabsKey: unseal(row.elevenlabsKey) || base.elevenlabsKey,
         ...ytPair,
+        ...igPair,
       };
     }
   } catch {
