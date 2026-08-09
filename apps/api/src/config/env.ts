@@ -37,6 +37,8 @@ export const env = {
   ytClientSecret: process.env.YT_CLIENT_SECRET ?? "",
   igAppId: process.env.IG_APP_ID ?? "",
   igAppSecret: process.env.IG_APP_SECRET ?? "",
+  tiktokClientKey: process.env.TIKTOK_CLIENT_KEY ?? "",
+  tiktokClientSecret: process.env.TIKTOK_CLIENT_SECRET ?? "",
   stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
   stripePrices: {

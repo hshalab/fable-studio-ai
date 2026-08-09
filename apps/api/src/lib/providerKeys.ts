@@ -27,6 +27,8 @@ export interface ProviderKeys {
   ytClientSecret: string;
   igAppId: string;
   igAppSecret: string;
+  tiktokClientKey: string;
+  tiktokClientSecret: string;
 }
 
 function envKeys(): ProviderKeys {
@@ -39,6 +41,8 @@ function envKeys(): ProviderKeys {
     ytClientSecret: env.ytClientSecret,
     igAppId: env.igAppId,
     igAppSecret: env.igAppSecret,
+    tiktokClientKey: env.tiktokClientKey,
+    tiktokClientSecret: env.tiktokClientSecret,
   };
 }
 
@@ -75,6 +79,15 @@ export async function getUserKeys(userId: string): Promise<ProviderKeys> {
         userIgId && userIgSecret
           ? { igAppId: userIgId, igAppSecret: userIgSecret }
           : { igAppId: base.igAppId, igAppSecret: base.igAppSecret };
+      const userTtKey = unseal(row.tiktokClientKey);
+      const userTtSecret = unseal(row.tiktokClientSecret);
+      const tiktokPair =
+        userTtKey && userTtSecret
+          ? { tiktokClientKey: userTtKey, tiktokClientSecret: userTtSecret }
+          : {
+              tiktokClientKey: base.tiktokClientKey,
+              tiktokClientSecret: base.tiktokClientSecret,
+            };
       keys = {
         openaiKey: unseal(row.openaiKey) || base.openaiKey,
         anthropicKey: unseal(row.anthropicKey) || base.anthropicKey,
@@ -82,6 +95,7 @@ export async function getUserKeys(userId: string): Promise<ProviderKeys> {
         elevenlabsKey: unseal(row.elevenlabsKey) || base.elevenlabsKey,
         ...ytPair,
         ...igPair,
+        ...tiktokPair,
       };
     }
   } catch {

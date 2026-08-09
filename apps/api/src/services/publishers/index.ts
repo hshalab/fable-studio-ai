@@ -1,5 +1,6 @@
 import type { PlatformId } from "../../lib/connections";
 import { instagramPublisher } from "./instagram";
+import { tiktokPublisher } from "./tiktok";
 import type { Publisher } from "./types";
 import { youtubePublisher } from "./youtube";
 
@@ -16,8 +17,7 @@ export * from "./types";
 const REGISTRY: Partial<Record<PlatformId, Publisher>> = {
   youtube: youtubePublisher,
   instagram: instagramPublisher,
-  // tiktok lands next — deliberately absent rather than stubbed, so
-  // getPublisher() fails loudly instead of a stub silently doing nothing.
+  tiktok: tiktokPublisher,
 };
 
 export function getPublisher(platform: PlatformId): Publisher {

@@ -49,6 +49,9 @@ model ProviderCredential {
   /// Meta app for Instagram publishing. Sealed like every other value here.
   igAppId        String   @default("")
   igAppSecret    String   @default("")
+  /// TikTok calls it a client KEY, not a client id.
+  tiktokClientKey    String @default("")
+  tiktokClientSecret String @default("")
   updatedAt      DateTime @updatedAt
 }
 
