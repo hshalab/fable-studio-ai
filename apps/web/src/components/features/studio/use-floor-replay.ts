@@ -61,19 +61,25 @@ export function useFloorReplay(
 ): ReplayResult {
   // Freeze the source when replay starts. Without this the 2.5s poll would
   // swap the array mid-playback and the cursor would point at a different run.
-  const frozen = useRef<FloorLog[]>([]);
+  //
+  // STATE, not a ref: a ref mutation does not re-render, so `total` would keep
+  // the value it had before the effect ran — zero — and the replay would report
+  // "0 of 0" forever while sitting on a full log array.
+  const [frozen, setFrozen] = useState<FloorLog[]>([]);
   const [cursor, setCursor] = useState(0);
+  const latest = useRef<FloorLog[] | undefined>(sourceLogs);
+  latest.current = sourceLogs;
 
   useEffect(() => {
     if (active) {
-      frozen.current = [...(sourceLogs ?? [])];
+      setFrozen([...(latest.current ?? [])]);
       setCursor(0);
+    } else {
+      setFrozen([]);
     }
-    // sourceLogs deliberately absent: capture once, at the moment of starting.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  const total = active ? frozen.current.length : 0;
+  const total = active ? frozen.length : 0;
 
   useEffect(() => {
     if (!active || total === 0) return;
@@ -87,7 +93,7 @@ export function useFloorReplay(
     if (!active || total === 0) {
       return { active: false, agents: [], logs: [], progress: 0, total: 0 };
     }
-    const shown = frozen.current.slice(0, Math.min(cursor + 1, total));
+    const shown = frozen.slice(0, Math.min(cursor + 1, total));
     const current = shown[shown.length - 1];
     // The agent on the newest line is at their station; anyone who has already
     // had a line this run is queued (they are part of this job), the rest idle.
@@ -110,5 +116,5 @@ export function useFloorReplay(
       progress: Math.min(1, (cursor + 1) / total),
       total,
     };
-  }, [active, cursor, total]);
+  }, [active, cursor, total, frozen]);
 }
