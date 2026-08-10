@@ -64,13 +64,22 @@ interface Station {
   standAt: [number, number];
   hue: string; // svg fill hue
   chip: string; // tailwind text color for the label chip
+  /**
+   * Pixel nudge for the label chip, away from the robot that stands here.
+   *
+   * The default position (centred, 66px above the block) collides with the
+   * robot's own name badge at two stations, because those two stand almost
+   * directly under their sign. Tuned by eye against the rendered scene rather
+   * than derived, since the robots wander and no single rule clears every pose.
+   */
+  labelNudge?: [number, number];
 }
 
 const STATIONS: Station[] = [
   { key: "writer", label: "Script Desk", emoji: "✍️", at: [2.2, 1.6], standAt: [3.1, 2.7], hue: "150 75% 50%", chip: "text-emerald-300" },
   { key: "voice", label: "Voice Booth", emoji: "🎙️", at: [7.4, 1.5], standAt: [6.5, 2.6], hue: "24 88% 56%",  chip: "text-orange-300" },
-  { key: "render", label: "Render Bay", emoji: "🎬", at: [8.3, 5.4], standAt: [7.2, 5.9], hue: "195 85% 55%", chip: "text-cyan-300" },
-  { key: "upload", label: "Upload Dock", emoji: "📤", at: [6.3, 8.3], standAt: [5.6, 7.2], hue: "150 75% 50%", chip: "text-emerald-300" },
+  { key: "render", label: "Render Bay", emoji: "🎬", at: [8.3, 5.4], standAt: [7.2, 5.9], hue: "195 85% 55%", chip: "text-cyan-300", labelNudge: [44, -12] },
+  { key: "upload", label: "Upload Dock", emoji: "📤", at: [6.3, 8.3], standAt: [5.6, 7.2], hue: "150 75% 50%", chip: "text-emerald-300", labelNudge: [0, -42] },
   { key: "analyst", label: "Stats Wall", emoji: "📊", at: [1.5, 5.8], standAt: [2.6, 6.3], hue: "45 95% 58%",  chip: "text-amber-300" },
 ];
 
@@ -637,7 +646,10 @@ export function StudioFloor({
               <div
                 key={s.key}
                 className="absolute z-50 -translate-x-1/2"
-                style={{ left: p.x, top: p.y - 66 }}
+                style={{
+                  left: p.x + (s.labelNudge?.[0] ?? 0),
+                  top: p.y - 66 + (s.labelNudge?.[1] ?? 0),
+                }}
               >
                 <div
                   className={cn(
