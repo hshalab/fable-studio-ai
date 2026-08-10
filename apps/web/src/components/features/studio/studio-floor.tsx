@@ -42,6 +42,9 @@ export interface FloorAgent {
 const SCENE_W = 880;
 const SCENE_H = 560;
 
+/** Upper bound on scale-to-fill, so an ultrawide window does not over-zoom. */
+const MAX_SCALE = 1.55;
+
 /** 3 × 2 grid of rooms with corridor gaps between them. */
 const MARGIN = 24;
 const GAP = 44;
@@ -167,6 +170,13 @@ const ROOMS: Room[] = [
 const ROOM_BY_KEY = Object.fromEntries(
   ROOMS.filter((r) => r.key).map((r) => [r.key as AgentKey, r]),
 ) as Record<AgentKey, Room>;
+
+/**
+ * Stations on the floor. The HUD denominator, deliberately NOT `agents.length`:
+ * that goes to zero while the run is loading, and "0 / 0 agents active" reads
+ * as a broken floor rather than an idle one.
+ */
+const CREW_SIZE = ROOMS.filter((r) => r.key).length;
 
 const AGENT_NAMES: Record<AgentKey, string> = {
   writer: "Quill",
@@ -531,12 +541,22 @@ function RoomShell({ room, lit }: { room: Room; lit: boolean }) {
         />
       ))}
 
-      {/* Name plate, sitting on the bottom wall */}
-      <rect x={x + 12} y={y + h - 9} width={room.label.length * 6.2 + 14} height="15" rx="2" fill="hsl(24 18% 6%)" />
+      {/* Name plate, sitting on the bottom wall. This is the room's only name —
+          a second floating chip above the room said the same word twice. The
+          dot carries the working state, as the neon wall already does. */}
+      <rect
+        x={x + 12}
+        y={y + h - 9}
+        width={room.label.length * 6.2 + 26}
+        height="15"
+        rx="2"
+        fill="hsl(24 18% 6%)"
+      />
+      <circle cx={x + 21} cy={y + h - 1.5} r={lit ? 3 : 2.4} fill={`hsl(${hue} / ${lit ? 1 : 0.5})`} />
       <text
-        x={x + 19}
+        x={x + 30}
         y={y + h + 2}
-        fill={`hsl(${hue} / 0.85)`}
+        fill={`hsl(${hue} / ${lit ? 1 : 0.72})`}
         fontSize="9.5"
         fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
         letterSpacing="1.2"
@@ -762,17 +782,14 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
           </motion.div>
         </motion.div>
 
-        {/* Name tag */}
+        {/* Name tag. Carries the job emoji too, which is the identity the
+            removed floating room chip used to supply. */}
         <div className="mt-0.5 flex items-center justify-center gap-1 whitespace-nowrap">
-          <span
-            className={cn(
-              "h-1 w-1 rounded-full",
-              working ? "animate-pulse-glow bg-emerald-400" : "bg-zinc-600",
-            )}
-          />
+          <span className="text-[9px] leading-none">{AGENT_EMOJI[agent.key]}</span>
           <span className="font-display text-[9.5px] font-bold text-foreground/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
             {AGENT_NAMES[agent.key]}
           </span>
+          {working && <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse-glow" />}
         </div>
       </div>
     </motion.div>
@@ -825,10 +842,12 @@ export function StudioFloor({
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    setScale(Math.min(1, el.clientWidth / SCENE_W));
-    const ro = new ResizeObserver(() => {
-      setScale(Math.min(1, el.clientWidth / SCENE_W));
-    });
+    // Fill the card rather than sitting in the middle of it. Upscaling is safe:
+    // the map is SVG and the robot sprites are 1024px sources drawn at 44. The
+    // cap stops an ultrawide window blowing the map up past its detail.
+    const fit = () => setScale(Math.min(MAX_SCALE, el.clientWidth / SCENE_W));
+    fit();
+    const ro = new ResizeObserver(fit);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -855,7 +874,7 @@ export function StudioFloor({
             )}
           />
           <span className="text-foreground/85">
-            {activeCount} / {agents.length || 5}
+            {activeCount} / {CREW_SIZE}
           </span>
           agents active
         </span>
@@ -873,36 +892,6 @@ export function StudioFloor({
           style={{ width: SCENE_W, height: SCENE_H, transform: `translateX(-50%) scale(${scale})` }}
         >
           <Scenery workingKeys={workingKeys} />
-
-          {/* Station label chips, pinned above each room's centre feature */}
-          {ROOMS.filter((r) => r.key).map((room) => {
-            const c = centre(room.rect);
-            const lit = workingKeys.has(room.key as AgentKey);
-            return (
-              <div
-                key={room.label}
-                className="absolute z-50 -translate-x-1/2"
-                style={{ left: c.x, top: room.rect.y + 14 }}
-              >
-                <div
-                  className={cn(
-                    "flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-background/75 px-2 py-1 shadow-lg backdrop-blur-md transition-colors duration-300",
-                    lit ? "border-primary/50" : "border-border/50",
-                  )}
-                >
-                  <span className="text-[10px]">{AGENT_EMOJI[room.key as AgentKey]}</span>
-                  <span className="text-[9.5px] font-semibold tracking-wide text-foreground/90">
-                    {room.label}
-                  </span>
-                  {lit && (
-                    <span className="rounded-full bg-emerald-500/15 px-1.5 text-[8.5px] font-semibold text-emerald-300">
-                      Active
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
 
           {!reduced && <JobPacket active={activeCount > 0} />}
 
