@@ -1,15 +1,20 @@
 "use client";
 
 /**
- * StudioFloor — an isometric "tycoon sim" view of the AI crew.
+ * StudioFloor — a top-down 2D map of the AI crew's facility.
  *
- * Classic 2:1 isometric projection (the same math as Theme Hospital / RCT):
- *   screen.x = (gx - gy) * TILE_W/2
- *   screen.y = (gx + gy) * TILE_H/2
- * The floor + walls + furniture are one SVG; the robots are absolutely
- * positioned sprites driven by motion values, walking waypoint-to-waypoint
- * with a state machine per robot. Depth = z-index from screen.y, exactly like
- * a sprite-sorted game. Everything animates transform/opacity only.
+ * Plan view, not isometric: rooms are axis-aligned rectangles ringed by a thick
+ * emissive border, sitting on a near-black void and joined by tan corridors.
+ * Everything inside a room is drawn as a top-down silhouette — dark bodies
+ * wearing thin bright strips — which is what makes a flat rectangle read as
+ * lit machinery rather than a coloured box.
+ *
+ * Coordinates are plain design pixels (see `SCENE_W`/`SCENE_H`); the whole
+ * scene scales to fit its container. Robots are absolutely positioned sprites
+ * driven by motion values, wandering inside their own room. They do not walk
+ * between rooms: the only honest routes are the corridors, and a robot cutting
+ * across the void to reach one would look like a bug. The job packet is what
+ * travels — and it travels along the corridors, which is the real story anyway.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -32,70 +37,136 @@ export interface FloorAgent {
   progress: number | null;
 }
 
-// ── Projection ───────────────────────────────────────────────────────────────
+// ── Scene geometry ───────────────────────────────────────────────────────────
 
-const TILE_W = 64;
-const TILE_H = 32;
-const GRID = 10;
-const WALL_H = 86;
+const SCENE_W = 880;
+const SCENE_H = 560;
 
-/** Design-space size; the whole scene scales to fit its container. */
-const SCENE_W = TILE_W * GRID + 96; // 736
-const SCENE_H = TILE_H * GRID + WALL_H + 120; // 526
-const OX = SCENE_W / 2;
-const OY = WALL_H + 34;
+/** 3 × 2 grid of rooms with corridor gaps between them. */
+const MARGIN = 24;
+const GAP = 44;
+const COL_W = (SCENE_W - MARGIN * 2 - GAP * 2) / 3; // 248
+const ROW_H = (SCENE_H - MARGIN * 2 - GAP) / 2; // 234
 
-function iso(gx: number, gy: number): { x: number; y: number } {
-  return {
-    x: OX + ((gx - gy) * TILE_W) / 2,
-    y: OY + ((gx + gy) * TILE_H) / 2,
-  };
+const COL_X = [MARGIN, MARGIN + COL_W + GAP, MARGIN + (COL_W + GAP) * 2];
+const ROW_Y = [MARGIN, MARGIN + ROW_H + GAP];
+
+/** Corridor band width. */
+const CORRIDOR = 30;
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
-// ── Layout: stations, wander spots, props ────────────────────────────────────
+function cell(col: number, row: number): Rect {
+  return { x: COL_X[col], y: ROW_Y[row], w: COL_W, h: ROW_H };
+}
 
-interface Station {
-  key: AgentKey;
+function centre(r: Rect): { x: number; y: number } {
+  return { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+}
+
+// ── Rooms ────────────────────────────────────────────────────────────────────
+
+type Feature = "ring" | "pad" | "tower" | "spire" | "belt" | "pool";
+
+interface Room {
+  /** null for the hub, which has no agent of its own. */
+  key: AgentKey | null;
   label: string;
-  emoji: string;
-  /** Where the furniture block sits. */
-  at: [number, number];
-  /** Where the robot stands to work (in front of the furniture). */
-  standAt: [number, number];
-  hue: string; // svg fill hue
-  chip: string; // tailwind text color for the label chip
-  /**
-   * Pixel nudge for the label chip, away from the robot that stands here.
-   *
-   * The default position (centred, 66px above the block) collides with the
-   * robot's own name badge at two stations, because those two stand almost
-   * directly under their sign. Tuned by eye against the rendered scene rather
-   * than derived, since the robots wander and no single rule clears every pose.
-   */
-  labelNudge?: [number, number];
+  rect: Rect;
+  hue: string;
+  feature: Feature;
+  /** Indices into SLOTS — which perimeter bays hold machinery. */
+  props: number[];
+  /** Indices into SLOTS — which hold foliage instead. */
+  plants: number[];
 }
 
-const STATIONS: Station[] = [
-  { key: "writer", label: "Script Desk", emoji: "✍️", at: [2.2, 1.6], standAt: [3.1, 2.7], hue: "150 75% 50%", chip: "text-emerald-300" },
-  { key: "voice", label: "Voice Booth", emoji: "🎙️", at: [7.4, 1.5], standAt: [6.5, 2.6], hue: "24 88% 56%",  chip: "text-orange-300" },
-  { key: "render", label: "Render Bay", emoji: "🎬", at: [8.3, 5.4], standAt: [7.2, 5.9], hue: "195 85% 55%", chip: "text-cyan-300", labelNudge: [44, -12] },
-  { key: "upload", label: "Upload Dock", emoji: "📤", at: [6.3, 8.3], standAt: [5.6, 7.2], hue: "150 75% 50%", chip: "text-emerald-300", labelNudge: [0, -42] },
-  { key: "analyst", label: "Stats Wall", emoji: "📊", at: [1.5, 5.8], standAt: [2.6, 6.3], hue: "45 95% 58%",  chip: "text-amber-300" },
+/**
+ * Perimeter bays as fractions of a room's size. Machinery and planting both
+ * draw from this one list so nothing ever lands on top of anything else, and
+ * each room picks a different subset to avoid five identical rooms.
+ */
+const SLOTS: [number, number, number, number][] = [
+  /* 0 */ [0.08, 0.06, 0.17, 0.11],
+  /* 1 */ [0.3, 0.06, 0.22, 0.09],
+  /* 2 */ [0.58, 0.06, 0.15, 0.11],
+  /* 3 */ [0.79, 0.06, 0.13, 0.1],
+  /* 4 */ [0.05, 0.24, 0.11, 0.17],
+  /* 5 */ [0.05, 0.46, 0.1, 0.21],
+  /* 6 */ [0.06, 0.73, 0.12, 0.16],
+  /* 7 */ [0.84, 0.22, 0.11, 0.19],
+  /* 8 */ [0.85, 0.47, 0.1, 0.18],
+  /* 9 */ [0.83, 0.71, 0.12, 0.18],
+  /* 10 */ [0.22, 0.83, 0.2, 0.1],
+  /* 11 */ [0.5, 0.84, 0.17, 0.09],
+  /* 12 */ [0.72, 0.83, 0.13, 0.1],
 ];
 
-const STATION_BY_KEY = Object.fromEntries(STATIONS.map((s) => [s.key, s])) as Record<
-  AgentKey,
-  Station
->;
-
-/** Shared hang-out spots for idle wandering. */
-const WANDER_SPOTS: [number, number][] = [
-  [4.8, 4.9], // lounge rug
-  [3.4, 8.2], // coffee corner
-  [8.2, 7.6],
-  [4.6, 6.8],
-  [5.6, 3.4],
+const ROOMS: Room[] = [
+  {
+    key: "writer",
+    label: "SCRIPT DESK",
+    rect: cell(0, 0),
+    hue: "140 80% 50%",
+    feature: "pad",
+    props: [0, 1, 4, 7, 10],
+    plants: [3, 6, 9],
+  },
+  {
+    key: "voice",
+    label: "VOICE BOOTH",
+    rect: cell(1, 0),
+    hue: "42 95% 55%",
+    feature: "tower",
+    props: [1, 2, 5, 8, 11],
+    plants: [0, 4, 12],
+  },
+  {
+    key: "render",
+    label: "RENDER BAY",
+    rect: cell(2, 0),
+    hue: "190 90% 55%",
+    feature: "spire",
+    props: [0, 2, 3, 6, 9, 11],
+    plants: [5, 10],
+  },
+  {
+    key: "analyst",
+    label: "STATS WALL",
+    rect: cell(0, 1),
+    hue: "350 85% 62%",
+    feature: "pool",
+    props: [1, 3, 5, 9, 12],
+    plants: [0, 6, 10],
+  },
+  {
+    key: null,
+    label: "THE BRIDGE",
+    rect: cell(1, 1),
+    hue: "22 95% 55%",
+    feature: "ring",
+    props: [0, 3, 4, 9],
+    plants: [1, 2, 6, 7, 10, 12],
+  },
+  {
+    key: "upload",
+    label: "UPLOAD DOCK",
+    rect: cell(2, 1),
+    hue: "280 85% 64%",
+    feature: "belt",
+    props: [0, 2, 4, 8, 10, 12],
+    plants: [3, 6],
+  },
 ];
+
+const ROOM_BY_KEY = Object.fromEntries(
+  ROOMS.filter((r) => r.key).map((r) => [r.key as AgentKey, r]),
+) as Record<AgentKey, Room>;
 
 const AGENT_NAMES: Record<AgentKey, string> = {
   writer: "Quill",
@@ -105,145 +176,386 @@ const AGENT_NAMES: Record<AgentKey, string> = {
   analyst: "Ledger",
 };
 
-/** Crates: [gx, gy, height]. Stacked against the back walls and in corners. */
-const CRATES: [number, number, number][] = [
-  [0.4, 0.5, 22], [1.0, 0.4, 16], [0.5, 1.2, 13],
-  [8.9, 0.6, 20], [9.2, 1.4, 14],
-  [0.6, 8.6, 18], [1.3, 9.1, 12],
-  [9.0, 8.8, 17], [8.4, 9.3, 11],
-  [4.9, 0.5, 15], [5.6, 0.4, 10],
+const AGENT_EMOJI: Record<AgentKey, string> = {
+  writer: "✍️",
+  voice: "🎙️",
+  render: "🎬",
+  upload: "📤",
+  analyst: "📊",
+};
+
+/** Corridors, as plain bands. Drawn under the rooms' glow. */
+const CORRIDORS: Rect[] = [
+  // horizontal, top row
+  { x: COL_X[0] + COL_W, y: ROW_Y[0] + ROW_H / 2 - CORRIDOR / 2, w: GAP, h: CORRIDOR },
+  { x: COL_X[1] + COL_W, y: ROW_Y[0] + ROW_H / 2 - CORRIDOR / 2, w: GAP, h: CORRIDOR },
+  // horizontal, bottom row
+  { x: COL_X[0] + COL_W, y: ROW_Y[1] + ROW_H / 2 - CORRIDOR / 2, w: GAP, h: CORRIDOR },
+  { x: COL_X[1] + COL_W, y: ROW_Y[1] + ROW_H / 2 - CORRIDOR / 2, w: GAP, h: CORRIDOR },
+  // vertical, one per column
+  { x: COL_X[0] + COL_W / 2 - CORRIDOR / 2, y: ROW_Y[0] + ROW_H, w: CORRIDOR, h: GAP },
+  { x: COL_X[1] + COL_W / 2 - CORRIDOR / 2, y: ROW_Y[0] + ROW_H, w: CORRIDOR, h: GAP },
+  { x: COL_X[2] + COL_W / 2 - CORRIDOR / 2, y: ROW_Y[0] + ROW_H, w: CORRIDOR, h: GAP },
 ];
 
-const CRATE_HUES = [
-  "24 85% 55%",   // amber
-  "150 70% 48%",  // acid green
-  "195 80% 55%",  // cyan
-  "24 85% 55%",
-  "263 70% 62%",  // a nod to the brand violet
-];
-
-/** Potted plants — the organic contrast the reference leans on heavily. */
-const PLANTS: [number, number][] = [
-  [1.9, 3.5], [7.9, 3.2], [2.2, 7.6], [7.4, 7.9], [5.1, 1.6],
-];
-
-/** Pipeline the job-packet travels when the crew is busy. */
+/** The route a job takes, as room keys. Every leg follows a real corridor. */
 const PIPELINE: AgentKey[] = ["writer", "voice", "render", "upload"];
 
-// ── SVG scenery ──────────────────────────────────────────────────────────────
+// ── Room chrome ──────────────────────────────────────────────────────────────
 
-function diamondPoints(gx: number, gy: number, w = 1, h = 1): string {
-  const a = iso(gx, gy);
-  const b = iso(gx + w, gy);
-  const c = iso(gx + w, gy + h);
-  const d = iso(gx, gy + h);
-  return `${a.x},${a.y} ${b.x},${b.y} ${c.x},${c.y} ${d.x},${d.y}`;
+function slotRect(room: Rect, slot: number): Rect {
+  const [fx, fy, fw, fh] = SLOTS[slot];
+  return { x: room.x + fx * room.w, y: room.y + fy * room.h, w: fw * room.w, h: fh * room.h };
 }
 
-/** Isometric box: floor diamond extruded upward — top + two visible faces. */
-function IsoBox({
-  gx,
-  gy,
-  w,
-  d,
-  h,
-  hue,
-  opacity = 1,
-}: {
-  gx: number;
-  gy: number;
-  w: number;
-  d: number;
-  h: number;
-  hue: string;
-  opacity?: number;
-}) {
-  const A = iso(gx, gy);
-  const B = iso(gx + w, gy);
-  const C = iso(gx + w, gy + d);
-  const D = iso(gx, gy + d);
-  const lift = (p: { x: number; y: number }) => `${p.x},${p.y - h}`;
+/** Top-down machinery: dark body, lighter cap, one emissive strip. */
+function Machine({ r, hue }: { r: Rect; hue: string }) {
+  const horizontal = r.w >= r.h;
   return (
-    <g opacity={opacity}>
-      {/* left face (D-C edge) */}
-      <polygon
-        points={`${D.x},${D.y} ${C.x},${C.y} ${lift(C)} ${lift(D)}`}
-        fill={`hsl(${hue} / 0.28)`}
-        stroke={`hsl(${hue} / 0.5)`}
+    <g>
+      <rect
+        x={r.x}
+        y={r.y}
+        width={r.w}
+        height={r.h}
+        rx="3"
+        fill="hsl(215 14% 15%)"
+        stroke="hsl(215 12% 26%)"
         strokeWidth="1"
       />
-      {/* right face (C-B edge) */}
-      <polygon
-        points={`${C.x},${C.y} ${B.x},${B.y} ${lift(B)} ${lift(C)}`}
-        fill={`hsl(${hue} / 0.16)`}
-        stroke={`hsl(${hue} / 0.5)`}
-        strokeWidth="1"
+      {/* Inset panel — reads as the machine's working surface from above. */}
+      <rect
+        x={r.x + 2.5}
+        y={r.y + 2.5}
+        width={Math.max(0, r.w - 5)}
+        height={Math.max(0, r.h - 5)}
+        rx="2"
+        fill="hsl(215 13% 21%)"
       />
-      {/* top face */}
-      <polygon
-        points={`${A.x},${A.y - h} ${B.x},${B.y - h} ${C.x},${C.y - h} ${D.x},${D.y - h}`}
-        fill={`hsl(${hue} / 0.42)`}
-        stroke={`hsl(${hue} / 0.75)`}
-        strokeWidth="1"
-      />
-      {/* Emissive rim along the two front edges. This is the single detail
-          that separates "lit machinery" from "coloured block": the reference
-          facilities are dark bodies with thin bright strips, not filled
-          shapes. Blurred through #bloom so it reads as light, not paint. */}
+      {/* The emissive strip. Everything else here is grey; this is the only
+          colour, which is why the machine reads as powered. */}
       <g filter="url(#bloom)">
-        <line
-          x1={D.x} y1={D.y - h} x2={C.x} y2={C.y - h}
-          stroke={`hsl(${hue} / 0.95)`} strokeWidth="1.6" strokeLinecap="round"
-        />
-        <line
-          x1={C.x} y1={C.y - h} x2={B.x} y2={B.y - h}
-          stroke={`hsl(${hue} / 0.95)`} strokeWidth="1.6" strokeLinecap="round"
-        />
+        {horizontal ? (
+          <line
+            x1={r.x + r.w * 0.18}
+            y1={r.y + r.h * 0.72}
+            x2={r.x + r.w * 0.82}
+            y2={r.y + r.h * 0.72}
+            stroke={`hsl(${hue} / 0.9)`}
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        ) : (
+          <line
+            x1={r.x + r.w * 0.72}
+            y1={r.y + r.h * 0.18}
+            x2={r.x + r.w * 0.72}
+            y2={r.y + r.h * 0.82}
+            stroke={`hsl(${hue} / 0.9)`}
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        )}
       </g>
     </g>
   );
 }
 
-function Scenery() {
-  const tiles = useMemo(() => {
-    const cells: { key: string; points: string; dark: boolean }[] = [];
-    for (let i = 0; i < GRID; i++) {
-      for (let j = 0; j < GRID; j++) {
-        cells.push({ key: `${i}-${j}`, points: diamondPoints(i, j), dark: (i + j) % 2 === 0 });
-      }
-    }
-    return cells;
-  }, []);
+/** Foliage: overlapping discs, seen from directly above. */
+function Foliage({ r }: { r: Rect }) {
+  const c = centre(r);
+  const rad = Math.min(r.w, r.h) / 2;
+  const blobs: [number, number, number][] = [
+    [-rad * 0.45, -rad * 0.25, rad * 0.62],
+    [rad * 0.4, -rad * 0.35, rad * 0.5],
+    [rad * 0.1, rad * 0.4, rad * 0.58],
+    [-rad * 0.3, rad * 0.45, rad * 0.42],
+  ];
+  return (
+    <g>
+      <rect
+        x={r.x}
+        y={r.y}
+        width={r.w}
+        height={r.h}
+        rx="3"
+        fill="hsl(200 10% 17%)"
+        stroke="hsl(200 10% 24%)"
+        strokeWidth="1"
+      />
+      {blobs.map(([dx, dy, rr], i) => (
+        <circle
+          key={i}
+          cx={c.x + dx}
+          cy={c.y + dy}
+          r={rr}
+          fill={i % 2 === 0 ? "hsl(128 42% 26%)" : "hsl(112 48% 34%)"}
+        />
+      ))}
+    </g>
+  );
+}
 
-  const c00 = iso(0, 0);
-  const cG0 = iso(GRID, 0);
-  const c0G = iso(0, GRID);
-  const cGG = iso(GRID, GRID);
+/** The showpiece in the middle of each room. */
+function CentreFeature({ room, lit }: { room: Room; lit: boolean }) {
+  const c = centre(room.rect);
+  const hue = room.hue;
+  const glow = lit ? 1 : 0.55;
+
+  switch (room.feature) {
+    case "ring":
+      return (
+        <g filter="url(#bloom)" opacity={glow}>
+          <circle cx={c.x} cy={c.y} r="42" fill="none" stroke={`hsl(${hue} / 0.35)`} strokeWidth="9" />
+          <circle cx={c.x} cy={c.y} r="42" fill="none" stroke={`hsl(${hue} / 0.95)`} strokeWidth="2" />
+          <circle cx={c.x} cy={c.y} r="24" fill={`hsl(${hue} / 0.5)`} />
+          <circle cx={c.x} cy={c.y} r="12" fill={`hsl(${hue} / 0.95)`} />
+          {[0, 60, 120, 180, 240, 300].map((deg) => {
+            const rad = (deg * Math.PI) / 180;
+            return (
+              <line
+                key={deg}
+                x1={c.x + Math.cos(rad) * 44}
+                y1={c.y + Math.sin(rad) * 44}
+                x2={c.x + Math.cos(rad) * 62}
+                y2={c.y + Math.sin(rad) * 62}
+                stroke={`hsl(${hue} / 0.8)`}
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+            );
+          })}
+        </g>
+      );
+    case "pad":
+      return (
+        <g opacity={glow}>
+          <rect
+            x={c.x - 44}
+            y={c.y - 26}
+            width="88"
+            height="52"
+            rx="4"
+            fill="hsl(215 14% 15%)"
+            stroke="hsl(215 12% 28%)"
+          />
+          <g filter="url(#bloom)">
+            <rect x={c.x - 36} y={c.y - 19} width="72" height="38" rx="3" fill={`hsl(${hue} / 0.85)`} />
+          </g>
+        </g>
+      );
+    case "tower":
+      return (
+        <g opacity={glow}>
+          <circle cx={c.x} cy={c.y} r="38" fill="none" stroke={`hsl(${hue} / 0.3)`} strokeWidth="6" />
+          <circle cx={c.x} cy={c.y} r="26" fill="hsl(215 14% 15%)" stroke="hsl(215 12% 28%)" />
+          <g filter="url(#bloom)">
+            <circle cx={c.x} cy={c.y} r="13" fill={`hsl(${hue} / 0.9)`} />
+            <circle cx={c.x} cy={c.y} r="26" fill="none" stroke={`hsl(${hue} / 0.85)`} strokeWidth="1.6" />
+          </g>
+        </g>
+      );
+    case "spire":
+      return (
+        <g opacity={glow}>
+          <circle cx={c.x} cy={c.y} r="34" fill="hsl(215 14% 15%)" stroke="hsl(215 12% 28%)" />
+          <g filter="url(#bloom)">
+            {[0, 90, 180, 270].map((deg) => {
+              const rad = (deg * Math.PI) / 180;
+              return (
+                <line
+                  key={deg}
+                  x1={c.x + Math.cos(rad) * 8}
+                  y1={c.y + Math.sin(rad) * 8}
+                  x2={c.x + Math.cos(rad) * 30}
+                  y2={c.y + Math.sin(rad) * 30}
+                  stroke={`hsl(${hue} / 0.9)`}
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
+              );
+            })}
+            <circle cx={c.x} cy={c.y} r="9" fill={`hsl(${hue} / 0.95)`} />
+          </g>
+        </g>
+      );
+    case "belt":
+      return (
+        <g opacity={glow}>
+          <rect
+            x={c.x - 50}
+            y={c.y - 28}
+            width="100"
+            height="56"
+            rx="4"
+            fill="hsl(215 14% 15%)"
+            stroke="hsl(215 12% 28%)"
+          />
+          <g filter="url(#bloom)">
+            {[-14, 0, 14].map((dy) => (
+              <line
+                key={dy}
+                x1={c.x - 40}
+                y1={c.y + dy}
+                x2={c.x + 40}
+                y2={c.y + dy}
+                stroke={`hsl(${hue} / 0.85)`}
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              />
+            ))}
+          </g>
+        </g>
+      );
+    case "pool":
+      return (
+        <g opacity={glow}>
+          <rect
+            x={c.x - 46}
+            y={c.y - 30}
+            width="92"
+            height="60"
+            rx="16"
+            fill="hsl(190 55% 22%)"
+            stroke="hsl(190 40% 32%)"
+          />
+          <g filter="url(#bloom)">
+            <rect
+              x={c.x - 38}
+              y={c.y - 23}
+              width="76"
+              height="46"
+              rx="13"
+              fill="hsl(186 80% 45% / 0.55)"
+            />
+          </g>
+          <circle cx={c.x - 20} cy={c.y - 6} r="5" fill="hsl(186 85% 70% / 0.5)" />
+          <circle cx={c.x + 16} cy={c.y + 9} r="4" fill="hsl(186 85% 70% / 0.4)" />
+        </g>
+      );
+  }
+}
+
+function RoomShell({ room, lit }: { room: Room; lit: boolean }) {
+  const { x, y, w, h } = room.rect;
+  const hue = room.hue;
+  const seams = useMemo(() => {
+    const lines: { key: string; d: string }[] = [];
+    const step = 31;
+    for (let gx = x + step; gx < x + w - 2; gx += step) {
+      lines.push({ key: `v${gx}`, d: `M${gx},${y + 4} L${gx},${y + h - 4}` });
+    }
+    for (let gy = y + step; gy < y + h - 2; gy += step) {
+      lines.push({ key: `h${gy}`, d: `M${x + 4},${gy} L${x + w - 4},${gy}` });
+    }
+    return lines;
+  }, [x, y, w, h]);
 
   return (
-    <svg
-      viewBox={`0 0 ${SCENE_W} ${SCENE_H}`}
-      className="absolute inset-0 h-full w-full"
-      aria-hidden
-    >
+    <g>
+      {/* Floor */}
+      <rect x={x} y={y} width={w} height={h} rx="4" fill="hsl(213 11% 30%)" />
+      {seams.map((l) => (
+        <path key={l.key} d={l.d} stroke="hsl(213 12% 24% / 0.85)" strokeWidth="1" fill="none" />
+      ))}
+      {/* A darker apron just inside the wall, as in the reference — it stops the
+          floor reading as one flat fill and gives the machinery something to
+          sit against. */}
+      <rect
+        x={x + 7}
+        y={y + 7}
+        width={w - 14}
+        height={h - 14}
+        rx="3"
+        fill="none"
+        stroke="hsl(213 12% 25%)"
+        strokeWidth="9"
+        opacity="0.55"
+      />
+
+      {/* Zone markers scattered on the floor */}
+      {[
+        [0.24, 0.36],
+        [0.74, 0.3],
+        [0.36, 0.68],
+        [0.66, 0.72],
+      ].map(([fx, fy], i) => (
+        <circle
+          key={i}
+          cx={x + fx * w}
+          cy={y + fy * h}
+          r="7"
+          fill="none"
+          stroke={`hsl(${hue} / 0.4)`}
+          strokeWidth="1.5"
+        />
+      ))}
+
+      <CentreFeature room={room} lit={lit} />
+
+      {room.props.map((s) => (
+        <Machine key={`m${s}`} r={slotRect(room.rect, s)} hue={hue} />
+      ))}
+      {room.plants.map((s) => (
+        <Foliage key={`p${s}`} r={slotRect(room.rect, s)} />
+      ))}
+
+      {/* The neon wall. Drawn last so it sits over everything inside. */}
+      <g filter="url(#bloom)">
+        <rect
+          x={x}
+          y={y}
+          width={w}
+          height={h}
+          rx="4"
+          fill="none"
+          stroke={`hsl(${hue} / ${lit ? 0.95 : 0.6})`}
+          strokeWidth="3.5"
+        />
+      </g>
+      {/* Corner markers */}
+      {[
+        [x, y],
+        [x + w, y],
+        [x, y + h],
+        [x + w, y + h],
+      ].map(([cx, cy], i) => (
+        <rect
+          key={i}
+          x={cx - 5}
+          y={cy - 5}
+          width="10"
+          height="10"
+          rx="1.5"
+          fill={`hsl(${hue} / ${lit ? 1 : 0.7})`}
+        />
+      ))}
+
+      {/* Name plate, sitting on the bottom wall */}
+      <rect x={x + 12} y={y + h - 9} width={room.label.length * 6.2 + 14} height="15" rx="2" fill="hsl(24 18% 6%)" />
+      <text
+        x={x + 19}
+        y={y + h + 2}
+        fill={`hsl(${hue} / 0.85)`}
+        fontSize="9.5"
+        fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+        letterSpacing="1.2"
+      >
+        {room.label}
+      </text>
+    </g>
+  );
+}
+
+function Scenery({ workingKeys }: { workingKeys: Set<AgentKey> }) {
+  return (
+    <svg viewBox={`0 0 ${SCENE_W} ${SCENE_H}`} className="absolute inset-0 h-full w-full" aria-hidden>
       <defs>
-        <linearGradient id="wallL" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="hsl(228 20% 15% / 0.9)" />
-          <stop offset="100%" stopColor="hsl(228 20% 8% / 0.5)" />
-        </linearGradient>
-        <linearGradient id="wallR" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="hsl(228 18% 13% / 0.85)" />
-          <stop offset="100%" stopColor="hsl(228 18% 7% / 0.45)" />
-        </linearGradient>
-        <radialGradient id="rug" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="hsl(150 80% 55% / 0.18)" />
-          <stop offset="100%" stopColor="hsl(150 80% 55% / 0)" />
-        </radialGradient>
-        {/* Bloom: the glow that makes an edge read as emissive. Kept tight —
-            a wide blur turns the whole floor into haze and kills the crispness
-            the reference relies on. */}
-        <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="2.4" result="blur" />
+        {/* Bloom: what makes a stroke read as emitted light rather than paint.
+            Kept tight — a wide blur turns the map into haze and loses the
+            crispness the reference depends on. */}
+        <filter id="bloom" x="-70%" y="-70%" width="240%" height="240%">
+          <feGaussianBlur stdDeviation="2.6" result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
@@ -251,151 +563,55 @@ function Scenery() {
         </filter>
       </defs>
 
-      {/* Walls (stand on the two back edges) */}
-      <polygon
-        points={`${c00.x},${c00.y} ${c0G.x},${c0G.y} ${c0G.x},${c0G.y - WALL_H} ${c00.x},${c00.y - WALL_H}`}
-        fill="url(#wallL)"
-        stroke="hsl(150 70% 55% / 0.28)"
-        strokeWidth="1"
-      />
-      <polygon
-        points={`${c00.x},${c00.y} ${cG0.x},${cG0.y} ${cG0.x},${cG0.y - WALL_H} ${c00.x},${c00.y - WALL_H}`}
-        fill="url(#wallR)"
-        stroke="hsl(150 70% 55% / 0.28)"
-        strokeWidth="1"
-      />
-      {/* Wall art: brand plaque + kanban cards */}
-      <g
-        transform={`translate(${c00.x - 150} ${c00.y - WALL_H / 2 + 42}) skewY(-26.5)`}
-      >
-        <text
-          x="0"
-          y="0"
-          fill="hsl(263 80% 78% / 0.8)"
-          fontSize="15"
-          fontWeight="700"
-          letterSpacing="2"
-          style={{ fontFamily: "var(--font-display, inherit)" }}
-        >
-          FABLE STUDIO
-        </text>
-      </g>
-      {[0, 1, 2].map((i) => (
-        <rect
-          key={i}
-          x={c00.x + 46 + i * 34}
-          y={c00.y - WALL_H + 40 + i * 17}
-          width="26"
-          height="18"
-          rx="3"
-          fill={`hsl(${[263, 330, 160][i]} 70% 62% / 0.4)`}
-          stroke="hsl(0 0% 100% / 0.2)"
+      {/* Void */}
+      <rect x="0" y="0" width={SCENE_W} height={SCENE_H} fill="hsl(24 22% 4%)" />
+
+      {/* Corridors, under the rooms */}
+      {CORRIDORS.map((c, i) => (
+        <g key={i}>
+          <rect x={c.x} y={c.y} width={c.w} height={c.h} fill="hsl(20 42% 56%)" />
+          <rect
+            x={c.x}
+            y={c.y}
+            width={c.w}
+            height={c.h}
+            fill="none"
+            stroke="hsl(20 35% 40%)"
+            strokeWidth="1"
+          />
+        </g>
+      ))}
+
+      {ROOMS.map((room) => (
+        <RoomShell
+          key={room.label}
+          room={room}
+          lit={room.key === null ? workingKeys.size > 0 : workingKeys.has(room.key)}
         />
       ))}
-
-      {/* Floor */}
-      <polygon
-        points={`${c00.x},${c00.y} ${cG0.x},${cG0.y} ${cGG.x},${cGG.y} ${c0G.x},${c0G.y}`}
-        fill="hsl(230 18% 7% / 0.96)"
-      />
-      {tiles.map((t) => (
-        <polygon
-          key={t.key}
-          points={t.points}
-          // Charcoal panelling. The old lilac tiles read as a diagram; a plant
-          // floor is nearly black and gets its colour from what is ON it.
-          fill={t.dark ? "hsl(228 16% 11% / 0.9)" : "hsl(228 14% 13% / 0.85)"}
-          stroke="hsl(150 60% 55% / 0.07)"
-          strokeWidth="1"
-        />
-      ))}
-
-      {/* Lounge rug */}
-      <ellipse
-        cx={iso(4.8, 4.9).x}
-        cy={iso(4.8, 4.9).y}
-        rx="66"
-        ry="33"
-        fill="url(#rug)"
-        stroke="hsl(263 70% 60% / 0.25)"
-        strokeDasharray="4 5"
-      />
-
-      {/* Zone pads: a bright outlined footprint under every station. The
-          reference marks its working areas on the floor this way, and it is
-          what stops a dark facility reading as an empty room. */}
-      {STATIONS.map((s) => (
-        <polygon
-          key={`pad-${s.key}`}
-          points={diamondPoints(s.at[0] - 1.15, s.at[1] - 0.95, 2.3, 2.1)}
-          fill={`hsl(${s.hue} / 0.05)`}
-          stroke={`hsl(${s.hue} / 0.5)`}
-          strokeWidth="1.2"
-          strokeDasharray="7 6"
-        />
-      ))}
-
-      {/* Station furniture */}
-      {STATIONS.map((s) => (
-        <IsoBox key={s.key} gx={s.at[0] - 0.75} gy={s.at[1] - 0.55} w={1.5} d={1.1} h={30} hue={s.hue} />
-      ))}
-
-      {/* Clutter. Density is most of what separates the reference from a
-          diagram — crates stacked by the walls, cable runs between stations,
-          planting softening the grey. Fixed positions, not random: this
-          renders on the server too, and a random layout would hydrate
-          differently from the markup React already sent. */}
-      {CRATES.map((c, i) => (
-        <IsoBox
-          key={`crate-${i}`}
-          gx={c[0]} gy={c[1]} w={0.55} d={0.55} h={c[2]}
-          hue={CRATE_HUES[i % CRATE_HUES.length]}
-          opacity={0.9}
-        />
-      ))}
-
-      {/* Cable runs — thin emissive lines tracking the pipeline order. */}
-      <g filter="url(#bloom)" opacity="0.55">
-        {PIPELINE.slice(0, -1).map((key, i) => {
-          const a = STATION_BY_KEY[key];
-          const b = STATION_BY_KEY[PIPELINE[i + 1]];
-          const p1 = iso(a.standAt[0], a.standAt[1]);
-          const p2 = iso(b.standAt[0], b.standAt[1]);
-          return (
-            <line
-              key={`cable-${key}`}
-              x1={p1.x} y1={p1.y + 3} x2={p2.x} y2={p2.y + 3}
-              stroke="hsl(150 80% 55% / 0.5)"
-              strokeWidth="1.2"
-              strokeDasharray="3 7"
-            />
-          );
-        })}
-      </g>
-
-      {/* Planting */}
-      {PLANTS.map((pt, i) => {
-        const c = iso(pt[0], pt[1]);
-        return (
-          <g key={`plant-${i}`} transform={`translate(${c.x} ${c.y})`}>
-            <ellipse cx="0" cy="0" rx="7" ry="3.5" fill="hsl(228 20% 5% / 0.55)" />
-            <path
-              d="M0,0 C-6,-7 -8,-13 -3,-16 M0,0 C5,-8 9,-12 4,-17 M0,0 C0,-8 1,-14 0,-19"
-              fill="none"
-              stroke="hsl(140 55% 45%)"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-            />
-          </g>
-        );
-      })}
     </svg>
   );
 }
 
-// ── Robot sprite with a walking state machine ────────────────────────────────
+// ── Robots ───────────────────────────────────────────────────────────────────
 
 const WALK_SPEED = 46; // design px / second
+
+/** Where a robot stands to work, and the spots it drifts to when it is not. */
+function workSpot(room: Room): { x: number; y: number } {
+  const c = centre(room.rect);
+  return { x: c.x - 4, y: c.y + 46 };
+}
+
+function idleSpots(room: Room): { x: number; y: number }[] {
+  const { x, y, w, h } = room.rect;
+  return [
+    { x: x + w * 0.26, y: y + h * 0.36 },
+    { x: x + w * 0.74, y: y + h * 0.32 },
+    { x: x + w * 0.38, y: y + h * 0.68 },
+    { x: x + w * 0.66, y: y + h * 0.7 },
+  ];
+}
 
 interface RobotProps {
   agent: FloorAgent;
@@ -404,8 +620,8 @@ interface RobotProps {
 }
 
 function Robot({ agent, entryDelay, reduced }: RobotProps) {
-  const station = STATION_BY_KEY[agent.key];
-  const home = iso(station.standAt[0], station.standAt[1]);
+  const room = ROOM_BY_KEY[agent.key];
+  const home = workSpot(room);
   const x = useMotionValue(home.x);
   const y = useMotionValue(home.y);
   const zIndex = useTransform(y, (v) => 100 + Math.round(v));
@@ -434,34 +650,31 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
       await Promise.all([a, b]);
     };
 
-    const pause = (ms: number) =>
-      new Promise<void>((resolve) => setTimeout(resolve, ms));
+    const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+    // A call, not a direct comparison: the ref mutates behind TypeScript's
+    // back, so an inline `statusRef.current === "working"` narrows the type in
+    // the else branch and the later re-check stops compiling.
+    const isWorking = () => statusRef.current === "working";
 
     (async () => {
       await pause(600 + entryDelay * 1000);
+      const spots = idleSpots(room);
       while (alive) {
-        const working = statusRef.current === "working";
-        if (working) {
-          // Clock in: walk to the station and work until the status changes.
-          const spot = iso(station.standAt[0], station.standAt[1]);
+        if (isWorking()) {
+          // Clock in: walk to the centre feature and work until status changes.
+          const spot = workSpot(room);
           await walkTo(spot.x, spot.y);
           if (!alive) break;
-          setFacing(station.at[0] >= station.standAt[0] ? 1 : -1);
           setMode("work");
-          while (alive && statusRef.current === "working") await pause(400);
+          while (alive && isWorking()) await pause(400);
         } else {
-          // Off the clock: hang about like a tycoon citizen.
           setMode("idle");
           await pause(1200 + Math.random() * 3200);
-          if (!alive || statusRef.current === "working") continue;
-          const roll = Math.random();
-          const [wx, wy] =
-            roll < 0.4
-              ? station.standAt
-              : WANDER_SPOTS[Math.floor(Math.random() * WANDER_SPOTS.length)];
-          const jitter = () => (Math.random() - 0.5) * 0.7;
-          const target = iso(wx + jitter(), wy + jitter());
-          await walkTo(target.x, target.y);
+          if (!alive || isWorking()) continue;
+          const target = spots[Math.floor(Math.random() * spots.length)];
+          const jitter = () => (Math.random() - 0.5) * 18;
+          await walkTo(target.x + jitter(), target.y + jitter());
           if (!alive) break;
           setMode("idle");
         }
@@ -491,7 +704,7 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
       animate={{ opacity: 1 }}
       transition={{ duration: 0.35, delay: entryDelay, ease: [0.23, 1, 0.32, 1] }}
     >
-      <div className="relative" style={{ transform: "translateX(-50%)" }}>
+      <div className="relative" style={{ transform: "translate(-50%, -50%)" }}>
         {/* Task bubble */}
         {working && agent.task && (
           <motion.div
@@ -499,7 +712,7 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}
             style={{ transformOrigin: "bottom center" }}
-            className="absolute -top-[92px] left-1/2 z-10 w-40 -translate-x-1/2 rounded-xl border border-primary/30 bg-popover/95 px-2.5 py-1.5 text-center shadow-xl backdrop-blur-xl"
+            className="absolute -top-[74px] left-1/2 z-10 w-40 -translate-x-1/2 rounded-xl border border-primary/30 bg-popover/95 px-2.5 py-1.5 text-center shadow-xl backdrop-blur-xl"
           >
             <p className="truncate text-[10.5px] font-medium">{agent.task}</p>
             {agent.progress !== null && <Progress value={agent.progress} className="mt-1 h-1" />}
@@ -507,21 +720,23 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
           </motion.div>
         )}
 
-        {/* Sprite: outer flips direction, inner bobs */}
+        {/* Drop shadow on the floor, directly under the sprite (plan view). */}
+        <div className="absolute left-1/2 top-1/2 h-4 w-8 -translate-x-1/2 -translate-y-1/4 rounded-[100%] bg-black/60 blur-[3px]" />
+
         <motion.div
           animate={{ scaleX: facing }}
           transition={{ duration: 0.18, ease: [0.23, 1, 0.32, 1] }}
-          className="relative -mt-[64px]"
+          className="relative"
         >
           <motion.div
             animate={
               reduced
                 ? { y: 0 }
                 : mode === "walk"
-                  ? { y: [0, -4, 0] }
+                  ? { y: [0, -3, 0] }
                   : mode === "work"
-                    ? { y: [0, -6, 0] }
-                    : { y: [0, -2, 0] }
+                    ? { y: [0, -4, 0] }
+                    : { y: [0, -1.5, 0] }
             }
             transition={
               reduced
@@ -533,8 +748,8 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
                   }
             }
             className={cn(
-              "overflow-hidden rounded-xl ring-1 transition-shadow duration-300",
-              working ? "ring-primary/60 glow-primary" : "ring-border/60 saturate-[0.85]",
+              "overflow-hidden rounded-lg ring-1 transition-shadow duration-300",
+              working ? "ring-primary/70 glow-primary" : "ring-border/50 saturate-[0.8]",
             )}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -542,28 +757,20 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
               src={`/studio/${agent.key}.png`}
               alt={AGENT_NAMES[agent.key]}
               draggable={false}
-              className="h-14 w-14 object-cover"
+              className="h-11 w-11 object-cover"
             />
           </motion.div>
         </motion.div>
 
-        {/* Ground shadow */}
-        <div
-          className={cn(
-            "mx-auto -mt-1 h-2 rounded-[100%] bg-black/55 blur-[2.5px] transition-all duration-300",
-            mode === "walk" ? "w-9 opacity-60" : working ? "w-11 opacity-90" : "w-10 opacity-50",
-          )}
-        />
-
         {/* Name tag */}
-        <div className="mt-1 flex items-center justify-center gap-1">
+        <div className="mt-0.5 flex items-center justify-center gap-1 whitespace-nowrap">
           <span
             className={cn(
               "h-1 w-1 rounded-full",
               working ? "animate-pulse-glow bg-emerald-400" : "bg-zinc-600",
             )}
           />
-          <span className="font-display text-[10px] font-bold text-foreground/90">
+          <span className="font-display text-[9.5px] font-bold text-foreground/90 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]">
             {AGENT_NAMES[agent.key]}
           </span>
         </div>
@@ -572,20 +779,32 @@ function Robot({ agent, entryDelay, reduced }: RobotProps) {
   );
 }
 
-// ── The glowing job packet riding the pipeline ───────────────────────────────
+// ── The job packet riding the corridors ──────────────────────────────────────
 
+/**
+ * Waypoints for one job: room centre → corridor → next room centre. The route
+ * writer → voice → render → upload happens to run along the top row and then
+ * down the right-hand column, so every leg is an axis-aligned run down a real
+ * corridor. Adding a station off that path would need an actual route search.
+ */
 function JobPacket({ active }: { active: boolean }) {
-  const points = useMemo(() => PIPELINE.map((k) => iso(...STATION_BY_KEY[k].at)), []);
+  const points = useMemo(() => PIPELINE.map((k) => centre(ROOM_BY_KEY[k].rect)), []);
   if (!active) return null;
   return (
     <motion.div
-      className="absolute left-0 top-0 z-[60] h-2.5 w-2.5 rounded-sm bg-primary shadow-[0_0_12px_3px_hsl(263_70%_60%/0.55)]"
+      className="absolute left-0 top-0 z-[60] h-3 w-3 rounded-sm bg-primary shadow-[0_0_14px_4px_hsl(263_70%_60%/0.6)]"
       animate={{
-        x: points.map((p) => p.x - 5),
-        y: points.map((p) => p.y - 36),
+        x: points.map((p) => p.x - 6),
+        y: points.map((p) => p.y - 6),
         opacity: [0, 1, 1, 1, 1, 0],
       }}
-      transition={{ duration: 7, times: [0, 0.05, 0.35, 0.65, 0.95, 1], repeat: Infinity, ease: "linear", repeatDelay: 1.2 }}
+      transition={{
+        duration: 7,
+        times: [0, 0.05, 0.35, 0.65, 0.95, 1],
+        repeat: Infinity,
+        ease: "linear",
+        repeatDelay: 1.2,
+      }}
     />
   );
 }
@@ -606,6 +825,7 @@ export function StudioFloor({
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
+    setScale(Math.min(1, el.clientWidth / SCENE_W));
     const ro = new ResizeObserver(() => {
       setScale(Math.min(1, el.clientWidth / SCENE_W));
     });
@@ -613,21 +833,37 @@ export function StudioFloor({
     return () => ro.disconnect();
   }, []);
 
-  const activeCount = agents.filter((a) => a.status === "working").length;
+  const working = agents.filter((a) => a.status === "working");
+  const workingKeys = useMemo(
+    () => new Set(working.map((a) => a.key)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [working.map((a) => a.key).join(",")],
+  );
+  const activeCount = working.length;
+  const currentTask = working.find((a) => a.task)?.task ?? null;
 
   return (
     <div className="glass relative overflow-hidden rounded-3xl">
-      {/* Status pill */}
-      <div className="absolute right-4 top-4 z-[70] flex items-center gap-2 rounded-full border border-border/60 bg-background/60 px-3 py-1.5 backdrop-blur-md">
-        <span
-          className={cn(
-            "h-1.5 w-1.5 rounded-full",
-            activeCount > 0 ? "animate-pulse-glow bg-emerald-400" : "bg-zinc-600",
-          )}
-        />
-        <span className="text-[11px] font-medium text-muted-foreground">
-          {activeCount > 0 ? `${activeCount} agent${activeCount > 1 ? "s" : ""} working` : "Crew on standby"}
-          {queueDepth > 0 ? ` · ${queueDepth} queued` : ""}
+      {/* HUD strip — the reference's status bar, fed by the same numbers the
+          rest of the page shows. */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-border/50 bg-background/50 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground backdrop-blur-md">
+        <span className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              activeCount > 0 ? "animate-pulse-glow bg-emerald-400" : "bg-zinc-600",
+            )}
+          />
+          <span className="text-foreground/85">
+            {activeCount} / {agents.length || 5}
+          </span>
+          agents active
+        </span>
+        <span>
+          queue <span className="text-foreground/85">{queueDepth}</span>
+        </span>
+        <span className="min-w-0 flex-1 truncate normal-case tracking-normal text-muted-foreground/70">
+          {currentTask ?? "idle — crew on standby"}
         </span>
       </div>
 
@@ -636,33 +872,30 @@ export function StudioFloor({
           className="absolute left-1/2 top-0 origin-top"
           style={{ width: SCENE_W, height: SCENE_H, transform: `translateX(-50%) scale(${scale})` }}
         >
-          <Scenery />
+          <Scenery workingKeys={workingKeys} />
 
-          {/* Station label chips */}
-          {STATIONS.map((s) => {
-            const p = iso(s.at[0], s.at[1]);
-            const agentWorking = agents.find((a) => a.key === s.key)?.status === "working";
+          {/* Station label chips, pinned above each room's centre feature */}
+          {ROOMS.filter((r) => r.key).map((room) => {
+            const c = centre(room.rect);
+            const lit = workingKeys.has(room.key as AgentKey);
             return (
               <div
-                key={s.key}
+                key={room.label}
                 className="absolute z-50 -translate-x-1/2"
-                style={{
-                  left: p.x + (s.labelNudge?.[0] ?? 0),
-                  top: p.y - 66 + (s.labelNudge?.[1] ?? 0),
-                }}
+                style={{ left: c.x, top: room.rect.y + 14 }}
               >
                 <div
                   className={cn(
-                    "flex items-center gap-1.5 whitespace-nowrap rounded-lg border bg-background/70 px-2 py-1 shadow-lg backdrop-blur-md transition-colors duration-300",
-                    agentWorking ? "border-primary/50" : "border-border/60",
+                    "flex items-center gap-1.5 whitespace-nowrap rounded-md border bg-background/75 px-2 py-1 shadow-lg backdrop-blur-md transition-colors duration-300",
+                    lit ? "border-primary/50" : "border-border/50",
                   )}
                 >
-                  <span className="text-[11px]">{s.emoji}</span>
-                  <span className="text-[10px] font-semibold tracking-wide text-foreground/90">
-                    {s.label}
+                  <span className="text-[10px]">{AGENT_EMOJI[room.key as AgentKey]}</span>
+                  <span className="text-[9.5px] font-semibold tracking-wide text-foreground/90">
+                    {room.label}
                   </span>
-                  {agentWorking && (
-                    <span className="rounded-full bg-emerald-500/15 px-1.5 text-[9px] font-semibold text-emerald-300">
+                  {lit && (
+                    <span className="rounded-full bg-emerald-500/15 px-1.5 text-[8.5px] font-semibold text-emerald-300">
                       Active
                     </span>
                   )}
@@ -670,11 +903,6 @@ export function StudioFloor({
               </div>
             );
           })}
-
-          {/* Ambient props */}
-          <div className="absolute z-40 -translate-x-1/2 text-lg" style={{ left: iso(0.9, 8.6).x, top: iso(0.9, 8.6).y - 20 }}>🪴</div>
-          <div className="absolute z-40 -translate-x-1/2 text-lg" style={{ left: iso(8.9, 0.8).x, top: iso(8.9, 0.8).y - 20 }}>🪴</div>
-          <div className="absolute z-40 -translate-x-1/2 text-sm" style={{ left: iso(3.4, 8.2).x, top: iso(3.4, 8.2).y - 16 }}>☕</div>
 
           {!reduced && <JobPacket active={activeCount > 0} />}
 
