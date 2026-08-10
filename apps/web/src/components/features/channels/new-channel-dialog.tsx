@@ -34,10 +34,13 @@ export function NewChannelDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const qc = useQueryClient();
-  // Fable Studio is curated to Would-You-Rather channels — the old type picker
-  // (step 0) is skipped; the clips/top5 engines stay dormant in the backend.
-  const [step, setStep] = useState(1);
-  const [type, setType] = useState<ChannelType | null>("wyr");
+  // The format picker is step 0. It was skipped back when the studio was only
+  // Would-You-Rather, but Campaign Clipping is now its own live section and it
+  // selects channels by `type !== "wyr"` — so with the picker skipped there was
+  // no way to create a channel that section could see, and no way to change a
+  // channel's type afterwards either (PATCH /channels does not accept it).
+  const [step, setStep] = useState(0);
+  const [type, setType] = useState<ChannelType | null>(null);
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
   const [handleTouched, setHandleTouched] = useState(false);
@@ -47,8 +50,8 @@ export function NewChannelDialog({
   // Fresh wizard every time it opens.
   useEffect(() => {
     if (open) {
-      setStep(1);
-      setType("wyr");
+      setStep(0);
+      setType(null);
       setName("");
       setHandle("");
       setHandleTouched(false);
@@ -89,12 +92,12 @@ export function NewChannelDialog({
             New channel
           </DialogTitle>
           <DialogDescription>
-            Step {step} of 2 — {STEP_TITLES[step]}
+            Step {step + 1} of 3 — {STEP_TITLES[step]}
           </DialogDescription>
         </DialogHeader>
 
         <div className="mb-1 flex gap-1.5">
-          {[1, 2].map((i) => (
+          {[0, 1, 2].map((i) => (
             <div
               key={i}
               className={cn(
@@ -243,7 +246,7 @@ export function NewChannelDialog({
           <Button
             variant="ghost"
             size="sm"
-            className={cn("gap-1.5", step === 1 && "invisible")}
+            className={cn("gap-1.5", step === 0 && "invisible")}
             onClick={() => setStep((s) => Math.max(0, s - 1))}
             disabled={create.isPending}
           >
