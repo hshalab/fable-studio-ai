@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Activity, Coins, ListTodo, UploadCloud, Zap } from "lucide-react";
+import { Activity, Coins, ListTodo, Play, Square, UploadCloud, Zap } from "lucide-react";
 import { formatCompact, formatGbp } from "@fable/shared";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/widgets/page-header";
 import { StudioFloor } from "@/components/features/studio/studio-floor";
+import { useFloorReplay } from "@/components/features/studio/use-floor-replay";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -84,13 +85,21 @@ export default function StudioPage() {
     refetchInterval: 2500,
   });
   const terminalRef = useRef<HTMLDivElement>(null);
+  const [replaying, setReplaying] = useState(false);
+  const replay = useFloorReplay(state.data?.logs, replaying);
+
+  const d = state.data;
+  // During replay the floor and terminal read from the replay cursor; the
+  // counters keep their real values but count up in step with it, so the
+  // numbers on screen are always ones the pipeline actually produced.
+  const agents = replay.active ? replay.agents : d?.agents ?? [];
+  const logs = replay.active ? replay.logs : d?.logs ?? [];
+  const scale = replay.active ? replay.progress : 1;
 
   useEffect(() => {
     const el = terminalRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [state.data?.logs]);
-
-  const d = state.data;
+  }, [logs]);
 
   return (
     <div className="space-y-6">
@@ -113,8 +122,34 @@ export default function StudioPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
           >
-            <StudioFloor agents={d.agents} queueDepth={d.counters.queueDepth} />
+            <StudioFloor
+              agents={agents}
+              queueDepth={replay.active ? Math.max(0, replay.total - replay.logs.length) : d.counters.queueDepth}
+            />
           </motion.div>
+
+          {/* Replay: the last real run, slowed to something you can record. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => setReplaying((v) => !v)}
+              disabled={!replaying && (d.logs?.length ?? 0) === 0}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors",
+                replaying
+                  ? "border-amber-400/40 bg-amber-400/15 text-amber-200"
+                  : "border-white/10 bg-white/5 text-muted-foreground hover:text-foreground",
+                !replaying && (d.logs?.length ?? 0) === 0 && "cursor-not-allowed opacity-40",
+              )}
+            >
+              {replaying ? <Square className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              {replaying ? "Stop replay" : "Replay last run"}
+            </button>
+            <p className="text-xs text-muted-foreground">
+              {replaying
+                ? `Replaying ${replay.total} real log lines — line ${replay.logs.length} of ${replay.total}. Nothing is simulated.`
+                : "Plays the crew's last real run back slowly enough to record."}
+            </p>
+          </div>
 
           {/* ── Counters + spend ── */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -125,8 +160,8 @@ export default function StudioPage() {
                 </p>
                 <Coins className="h-4 w-4 text-amber-400" />
               </div>
-              <p className="mt-2 font-display text-2xl font-bold">
-                {formatCompact(d.usage.tokens)} <span className="text-sm font-normal text-muted-foreground">tokens</span>
+              <p className="mt-2 font-display text-2xl font-bold tabular-nums">
+                {formatCompact(Math.round(d.usage.tokens * scale))} <span className="text-sm font-normal text-muted-foreground">tokens</span>
               </p>
               <p className="text-xs text-muted-foreground">
                 ≈ {formatGbp(d.usage.estCostGbp)} {d.usage.sinceLabel}
@@ -140,7 +175,7 @@ export default function StudioPage() {
                 </p>
                 <Zap className="h-4 w-4 text-violet-400" />
               </div>
-              <p className="mt-2 font-display text-2xl font-bold">{d.counters.generatedToday}</p>
+              <p className="mt-2 font-display text-2xl font-bold tabular-nums">{Math.round(d.counters.generatedToday * scale)}</p>
               <p className="text-xs text-muted-foreground">{d.counters.rendersToday} rendered</p>
             </motion.div>
 
@@ -186,18 +221,23 @@ export default function StudioPage() {
                 Terminal
               </span>
               <span className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="h-1.5 w-1.5 animate-pulse-glow rounded-full bg-emerald-400" />
-                live
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 animate-pulse-glow rounded-full",
+                    replay.active ? "bg-amber-400" : "bg-emerald-400",
+                  )}
+                />
+                {replay.active ? "replay" : "live"}
               </span>
             </div>
             <div
               ref={terminalRef}
               className="max-h-80 space-y-0.5 overflow-y-auto p-4 font-mono text-[11.5px] leading-relaxed"
             >
-              {d.logs.length === 0 && (
+              {logs.length === 0 && (
                 <p className="text-muted-foreground">No activity yet — kick off a project and watch the crew go.</p>
               )}
-              {d.logs.map((log, i) => (
+              {logs.map((log, i) => (
                 <div key={`${log.atMs}-${i}`} className="flex gap-2">
                   <span className="shrink-0 text-zinc-500">
                     {new Date(log.atMs).toLocaleTimeString("en-GB", { hour12: false })}
