@@ -39,11 +39,19 @@ export interface FloorAgent {
 
 // ── Scene geometry ───────────────────────────────────────────────────────────
 
-const SCENE_W = 880;
-const SCENE_H = 560;
+/**
+ * Scene size, shaped to the card it lives in.
+ *
+ * The aspect matters more than the numbers: a squarer scene scaled to fill a
+ * wide card ends up taller than the viewport and pushes the bottom row of rooms
+ * below the fold, which is exactly the row you want on camera. ~1.95:1 keeps
+ * the whole floor visible at once in a normal window.
+ */
+const SCENE_W = 1100;
+const SCENE_H = 564;
 
-/** Upper bound on scale-to-fill, so an ultrawide window does not over-zoom. */
-const MAX_SCALE = 1.55;
+/** Tallest the map may render. Scale fits BOTH axes, so nothing is ever cut. */
+const MAX_H = 640;
 
 /** 3 × 2 grid of rooms with corridor gaps between them. */
 const MARGIN = 24;
@@ -843,9 +851,10 @@ export function StudioFloor({
     const el = wrapRef.current;
     if (!el) return;
     // Fill the card rather than sitting in the middle of it. Upscaling is safe:
-    // the map is SVG and the robot sprites are 1024px sources drawn at 44. The
-    // cap stops an ultrawide window blowing the map up past its detail.
-    const fit = () => setScale(Math.min(MAX_SCALE, el.clientWidth / SCENE_W));
+    // the map is SVG and the robot sprites are 1024px sources drawn at 44.
+    // Fitting height as well as width is what stops the bottom row of rooms
+    // being clipped on a wide, short window.
+    const fit = () => setScale(Math.min(el.clientWidth / SCENE_W, MAX_H / SCENE_H));
     fit();
     const ro = new ResizeObserver(fit);
     ro.observe(el);
