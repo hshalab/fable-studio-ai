@@ -67,11 +67,11 @@ interface Station {
 }
 
 const STATIONS: Station[] = [
-  { key: "writer", label: "Script Desk", emoji: "✍️", at: [2.2, 1.6], standAt: [3.1, 2.7], hue: "263 70% 62%", chip: "text-violet-300" },
-  { key: "voice", label: "Voice Booth", emoji: "🎙️", at: [7.4, 1.5], standAt: [6.5, 2.6], hue: "330 75% 62%", chip: "text-pink-300" },
-  { key: "render", label: "Render Bay", emoji: "🎬", at: [8.3, 5.4], standAt: [7.2, 5.9], hue: "221 80% 62%", chip: "text-blue-300" },
-  { key: "upload", label: "Upload Dock", emoji: "📤", at: [6.3, 8.3], standAt: [5.6, 7.2], hue: "160 70% 48%", chip: "text-emerald-300" },
-  { key: "analyst", label: "Stats Wall", emoji: "📊", at: [1.5, 5.8], standAt: [2.6, 6.3], hue: "38 90% 55%", chip: "text-amber-300" },
+  { key: "writer", label: "Script Desk", emoji: "✍️", at: [2.2, 1.6], standAt: [3.1, 2.7], hue: "150 75% 50%", chip: "text-emerald-300" },
+  { key: "voice", label: "Voice Booth", emoji: "🎙️", at: [7.4, 1.5], standAt: [6.5, 2.6], hue: "24 88% 56%",  chip: "text-orange-300" },
+  { key: "render", label: "Render Bay", emoji: "🎬", at: [8.3, 5.4], standAt: [7.2, 5.9], hue: "195 85% 55%", chip: "text-cyan-300" },
+  { key: "upload", label: "Upload Dock", emoji: "📤", at: [6.3, 8.3], standAt: [5.6, 7.2], hue: "150 75% 50%", chip: "text-emerald-300" },
+  { key: "analyst", label: "Stats Wall", emoji: "📊", at: [1.5, 5.8], standAt: [2.6, 6.3], hue: "45 95% 58%",  chip: "text-amber-300" },
 ];
 
 const STATION_BY_KEY = Object.fromEntries(STATIONS.map((s) => [s.key, s])) as Record<
@@ -95,6 +95,28 @@ const AGENT_NAMES: Record<AgentKey, string> = {
   upload: "Dock",
   analyst: "Ledger",
 };
+
+/** Crates: [gx, gy, height]. Stacked against the back walls and in corners. */
+const CRATES: [number, number, number][] = [
+  [0.4, 0.5, 22], [1.0, 0.4, 16], [0.5, 1.2, 13],
+  [8.9, 0.6, 20], [9.2, 1.4, 14],
+  [0.6, 8.6, 18], [1.3, 9.1, 12],
+  [9.0, 8.8, 17], [8.4, 9.3, 11],
+  [4.9, 0.5, 15], [5.6, 0.4, 10],
+];
+
+const CRATE_HUES = [
+  "24 85% 55%",   // amber
+  "150 70% 48%",  // acid green
+  "195 80% 55%",  // cyan
+  "24 85% 55%",
+  "263 70% 62%",  // a nod to the brand violet
+];
+
+/** Potted plants — the organic contrast the reference leans on heavily. */
+const PLANTS: [number, number][] = [
+  [1.9, 3.5], [7.9, 3.2], [2.2, 7.6], [7.4, 7.9], [5.1, 1.6],
+];
 
 /** Pipeline the job-packet travels when the crew is busy. */
 const PIPELINE: AgentKey[] = ["writer", "voice", "render", "upload"];
@@ -155,6 +177,20 @@ function IsoBox({
         stroke={`hsl(${hue} / 0.75)`}
         strokeWidth="1"
       />
+      {/* Emissive rim along the two front edges. This is the single detail
+          that separates "lit machinery" from "coloured block": the reference
+          facilities are dark bodies with thin bright strips, not filled
+          shapes. Blurred through #bloom so it reads as light, not paint. */}
+      <g filter="url(#bloom)">
+        <line
+          x1={D.x} y1={D.y - h} x2={C.x} y2={C.y - h}
+          stroke={`hsl(${hue} / 0.95)`} strokeWidth="1.6" strokeLinecap="round"
+        />
+        <line
+          x1={C.x} y1={C.y - h} x2={B.x} y2={B.y - h}
+          stroke={`hsl(${hue} / 0.95)`} strokeWidth="1.6" strokeLinecap="round"
+        />
+      </g>
     </g>
   );
 }
@@ -183,30 +219,40 @@ function Scenery() {
     >
       <defs>
         <linearGradient id="wallL" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="hsl(263 45% 22% / 0.55)" />
-          <stop offset="100%" stopColor="hsl(263 45% 14% / 0.15)" />
+          <stop offset="0%" stopColor="hsl(228 20% 15% / 0.9)" />
+          <stop offset="100%" stopColor="hsl(228 20% 8% / 0.5)" />
         </linearGradient>
         <linearGradient id="wallR" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="hsl(230 40% 20% / 0.5)" />
-          <stop offset="100%" stopColor="hsl(230 40% 12% / 0.12)" />
+          <stop offset="0%" stopColor="hsl(228 18% 13% / 0.85)" />
+          <stop offset="100%" stopColor="hsl(228 18% 7% / 0.45)" />
         </linearGradient>
         <radialGradient id="rug" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="hsl(263 70% 60% / 0.22)" />
-          <stop offset="100%" stopColor="hsl(263 70% 60% / 0)" />
+          <stop offset="0%" stopColor="hsl(150 80% 55% / 0.18)" />
+          <stop offset="100%" stopColor="hsl(150 80% 55% / 0)" />
         </radialGradient>
+        {/* Bloom: the glow that makes an edge read as emissive. Kept tight —
+            a wide blur turns the whole floor into haze and kills the crispness
+            the reference relies on. */}
+        <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="2.4" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
 
       {/* Walls (stand on the two back edges) */}
       <polygon
         points={`${c00.x},${c00.y} ${c0G.x},${c0G.y} ${c0G.x},${c0G.y - WALL_H} ${c00.x},${c00.y - WALL_H}`}
         fill="url(#wallL)"
-        stroke="hsl(263 60% 60% / 0.35)"
+        stroke="hsl(150 70% 55% / 0.28)"
         strokeWidth="1"
       />
       <polygon
         points={`${c00.x},${c00.y} ${cG0.x},${cG0.y} ${cG0.x},${cG0.y - WALL_H} ${c00.x},${c00.y - WALL_H}`}
         fill="url(#wallR)"
-        stroke="hsl(263 60% 60% / 0.35)"
+        stroke="hsl(150 70% 55% / 0.28)"
         strokeWidth="1"
       />
       {/* Wall art: brand plaque + kanban cards */}
@@ -241,14 +287,16 @@ function Scenery() {
       {/* Floor */}
       <polygon
         points={`${c00.x},${c00.y} ${cG0.x},${cG0.y} ${cGG.x},${cGG.y} ${c0G.x},${c0G.y}`}
-        fill="hsl(250 30% 12% / 0.9)"
+        fill="hsl(230 18% 7% / 0.96)"
       />
       {tiles.map((t) => (
         <polygon
           key={t.key}
           points={t.points}
-          fill={t.dark ? "hsl(255 35% 16% / 0.5)" : "hsl(255 35% 20% / 0.35)"}
-          stroke="hsl(263 60% 60% / 0.14)"
+          // Charcoal panelling. The old lilac tiles read as a diagram; a plant
+          // floor is nearly black and gets its colour from what is ON it.
+          fill={t.dark ? "hsl(228 16% 11% / 0.9)" : "hsl(228 14% 13% / 0.85)"}
+          stroke="hsl(150 60% 55% / 0.07)"
           strokeWidth="1"
         />
       ))}
@@ -264,10 +312,74 @@ function Scenery() {
         strokeDasharray="4 5"
       />
 
+      {/* Zone pads: a bright outlined footprint under every station. The
+          reference marks its working areas on the floor this way, and it is
+          what stops a dark facility reading as an empty room. */}
+      {STATIONS.map((s) => (
+        <polygon
+          key={`pad-${s.key}`}
+          points={diamondPoints(s.at[0] - 1.15, s.at[1] - 0.95, 2.3, 2.1)}
+          fill={`hsl(${s.hue} / 0.05)`}
+          stroke={`hsl(${s.hue} / 0.5)`}
+          strokeWidth="1.2"
+          strokeDasharray="7 6"
+        />
+      ))}
+
       {/* Station furniture */}
       {STATIONS.map((s) => (
         <IsoBox key={s.key} gx={s.at[0] - 0.75} gy={s.at[1] - 0.55} w={1.5} d={1.1} h={30} hue={s.hue} />
       ))}
+
+      {/* Clutter. Density is most of what separates the reference from a
+          diagram — crates stacked by the walls, cable runs between stations,
+          planting softening the grey. Fixed positions, not random: this
+          renders on the server too, and a random layout would hydrate
+          differently from the markup React already sent. */}
+      {CRATES.map((c, i) => (
+        <IsoBox
+          key={`crate-${i}`}
+          gx={c[0]} gy={c[1]} w={0.55} d={0.55} h={c[2]}
+          hue={CRATE_HUES[i % CRATE_HUES.length]}
+          opacity={0.9}
+        />
+      ))}
+
+      {/* Cable runs — thin emissive lines tracking the pipeline order. */}
+      <g filter="url(#bloom)" opacity="0.55">
+        {PIPELINE.slice(0, -1).map((key, i) => {
+          const a = STATION_BY_KEY[key];
+          const b = STATION_BY_KEY[PIPELINE[i + 1]];
+          const p1 = iso(a.standAt[0], a.standAt[1]);
+          const p2 = iso(b.standAt[0], b.standAt[1]);
+          return (
+            <line
+              key={`cable-${key}`}
+              x1={p1.x} y1={p1.y + 3} x2={p2.x} y2={p2.y + 3}
+              stroke="hsl(150 80% 55% / 0.5)"
+              strokeWidth="1.2"
+              strokeDasharray="3 7"
+            />
+          );
+        })}
+      </g>
+
+      {/* Planting */}
+      {PLANTS.map((pt, i) => {
+        const c = iso(pt[0], pt[1]);
+        return (
+          <g key={`plant-${i}`} transform={`translate(${c.x} ${c.y})`}>
+            <ellipse cx="0" cy="0" rx="7" ry="3.5" fill="hsl(228 20% 5% / 0.55)" />
+            <path
+              d="M0,0 C-6,-7 -8,-13 -3,-16 M0,0 C5,-8 9,-12 4,-17 M0,0 C0,-8 1,-14 0,-19"
+              fill="none"
+              stroke="hsl(140 55% 45%)"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </g>
+        );
+      })}
     </svg>
   );
 }
